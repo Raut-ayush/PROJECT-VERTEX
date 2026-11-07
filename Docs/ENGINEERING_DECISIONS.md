@@ -87,7 +87,7 @@ The table lists proposed choices that are not yet accepted. The EDL records belo
 - **Date:** 2026-11-07
 - **Status:** Accepted for M1
 - **Decision:** Use an inertial x-z plane with x positive to the right and z positive upward. `theta = 0` is upright, with the body +x axis pointing right; positive theta rotates +x toward +z. Angular rate and applied moment are positive in the same rotational direction. State angles are radians and all quantities use SI units. Resolve generic applied force components from body axes into the inertial frame.
-- **Integration:** Use explicit forward Euler with a caller-supplied positive fixed time step. Update velocities/rates first, then positions/angles using the updated rates.
+- **Integration:** Use semi-implicit (symplectic) Euler with a caller-supplied positive fixed time step. Update velocities/rates first, then positions/angles using the updated rates. This corrects the previous method name; the numerical update is unchanged.
 - **Rationale:** This is a compact, explicit convention that supports sign tests without introducing an RL or graphics dependency.
 - **Alternatives considered:** Positive z downward; higher-order integration; forces directly in world axes. These are deferred to avoid ambiguity and scope growth.
 - **Consequences / limitations:** Euler integration has timestep-dependent error and this model has no ground contact, aerodynamic effects, changing mass, wind, or actuator behavior. These are educational simulation assumptions, not real vehicle parameters.
@@ -124,8 +124,29 @@ The table lists proposed choices that are not yet accepted. The EDL records belo
 - **Rationale:** Confirm the complete environment-to-policy-to-checkpoint path with low setup and compute overhead. CPU is the predictable baseline for a small non-CNN policy, and SB3's PPO guidance describes CPU as the primary choice for this kind of policy.
 - **Alternatives considered:** GPU execution, parallel environments, and hyperparameter searches. Deferred until a measured throughput comparison or a validated need exists.
 - **Compatibility evidence:** Official SB3 2.9.2 installation docs require Python 3.10+ and PyTorch >=2.8. This workspace is CPython 3.12.3; resolved versions are SB3 2.9.2 and PyTorch 2.15.0+cpu. PyTorch official Windows instructions support Python 3.10–3.14 and provide a CPU-only install selection.
-- **Verification:** 128-timestep test run saved and reloaded a checkpoint with a bounded action prediction. A separate 256-step CLI smoke run completed on CPU at approximately 1,711.8 steps/s, saving model, CSV log, and metadata. This verifies software integration only, not policy quality.
+- **Verification:** 128-timestep test run saved and reloaded a checkpoint with a bounded action prediction. A 256-step CLI smoke run completed on CPU at approximately 1,711.8 steps/s. After the CLI default fix, the default training command completed its requested 10,000 steps as 10,112 actual rollout steps (SB3 collects whole 128-step rollouts), at 1,337.6 steps/s. Its checkpoint evaluated on the ten default seeds with zero successes; all ten ended out of bounds. This verifies training and evaluation integration, while showing that this run did not learn successful landings.
 - **Consequences / limitations:** The short smoke run is not a learning assessment. Reward and terminal thresholds remain educational, and the task/model are not flight-ready. Do not claim successful landing from training reward.
+
+### EDL-013 — M4 deterministic evaluation baseline
+
+- **Date:** 2026-11-07
+- **Status:** Accepted for the baseline evaluation workflow
+- **Decision:** Evaluate saved PPO checkpoints using deterministic actions on the fixed seed list 1000–1009 by default. Save aggregate JSON, per-episode CSV, and state traces in JSONL. Report success rate and terminal failure categories separately from reward; calculate touchdown-state summaries only for episodes that touch down. Summarize the SB3 progress CSV trend when available.
+- **Rationale:** Separate policy evaluation from training and provide repeatable task outcome evidence for later learning assessment.
+- **Alternatives considered:** Visual evaluation during training and reward-only scoring. Rejected because rendering is reserved for separate M5 tooling and reward does not define landing success.
+- **Verification:** The 256-step smoke checkpoint on default seeds 1000–1009 had 0/10 successes, all unstable touchdowns; mean return -10.908 and mean episode length 70.4 steps. The later 10,112-step training run on the same default seeds had 0/10 successes, all out-of-bounds failures. Evaluation artifacts were produced for both runs; the end-to-end test covers checkpoint load, two episodes, categories, reward trend extraction, CSV, and traces.
+- **Consequences / limitations:** Ten episodes are an initial assessment only and cannot establish robust performance. Results show no successful landing in this sample. The high vertical touchdown speed is a task failure under the current criteria. M5 can consume saved traces without changing training.
+
+### EDL-014 — M5 optional trace viewer
+
+- **Date:** 2026-11-07
+- **Status:** Accepted for M5
+- **Decision:** Use Matplotlib as an optional visualization extra. The viewer reads M4 JSONL traces and supports interactive animated playback or static PNG export. Import Matplotlib only when a render function is called; keep the viewer outside training and physics imports.
+- **Rationale:** Provide visual inspection without putting graphics in the training hot path.
+- **Alternatives considered:** Live rendering during PPO training and a 3D renderer. Deferred to preserve headless throughput and match the 2D model.
+- **Display convention:** Draw the body +z axis as a short centerline glyph, using the M1 pitch convention. Its displayed length is illustrative and is not modeled vehicle geometry. Plot the simulated target band and z=0 surface.
+- **Verification:** Matplotlib 3.11.2 was installed as an optional extra. Static image export was rendered and visually inspected; tests cover trace selection, older report metadata, and PNG creation. Interactive GUI playback is available via the documented command.
+- **Consequences / limitations:** The viewer only depicts recorded toy-model state and terminal outcomes. It does not add physical geometry, sensor cues, or safety evidence.
 
 ## 3. Remaining decisions for later milestones
 

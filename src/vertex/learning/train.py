@@ -18,17 +18,21 @@ from stable_baselines3.common.logger import configure
 
 from vertex.environment import LandingEnv, LandingEnvConfig
 
+DEFAULT_TOTAL_TIMESTEPS = 10_000
+DEFAULT_SEED = 7
+
 
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
     """Conservative single-environment PPO settings for M3 integration."""
 
-    total_timesteps: int = 10_000
-    seed: int = 7
+    total_timesteps: int = DEFAULT_TOTAL_TIMESTEPS
+    seed: int = DEFAULT_SEED
     n_steps: int = 128
     batch_size: int = 64
     n_epochs: int = 5
     hidden_layers: tuple[int, ...] = (64, 64)
+    gamma: float = 0.99
     device: str = "cpu"
 
     def __post_init__(self) -> None:
@@ -40,6 +44,8 @@ class TrainingConfig:
             raise ValueError("batch_size must not exceed n_steps")
         if any(width <= 0 for width in self.hidden_layers):
             raise ValueError("hidden layer widths must be positive")
+        if not 0.0 <= self.gamma <= 1.0:
+            raise ValueError("gamma must be between 0 and 1 inclusive")
         if self.device != "cpu":
             raise ValueError("M3 baseline is CPU-only; benchmark before enabling GPU")
 
@@ -86,6 +92,10 @@ def train_ppo(
     training = training or TrainingConfig()
     environment = environment or LandingEnvConfig()
     output_path = Path(output_dir)
+    if output_path.exists():
+        raise FileExistsError(
+            f"Output directory already exists: {output_path}. Choose a new --output-dir; existing run data was preserved."
+        )
     output_path.mkdir(parents=True, exist_ok=False)
     log_dir = output_path / "logs"
     log_dir.mkdir()
@@ -99,6 +109,7 @@ def train_ppo(
         n_steps=training.n_steps,
         batch_size=training.batch_size,
         n_epochs=training.n_epochs,
+        gamma=training.gamma,
         policy_kwargs={"net_arch": list(training.hidden_layers)},
         verbose=1,
     )
@@ -146,18 +157,27 @@ def train_ppo(
     return metadata
 
 
-def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--timesteps", type=int, default=TrainingConfig.total_timesteps)
-    parser.add_argument("--seed", type=int, default=TrainingConfig.seed)
+    parser.add_argument("--timesteps", type=int, default=DEFAULT_TOTAL_TIMESTEPS)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--output-dir", type=Path, default=None)
+    return parser
+
+
+def main() -> None:
+    parser = _build_parser()
     args = parser.parse_args()
     run_id = datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ")
     output_dir = args.output_dir or Path("runs") / run_id
-    metadata = train_ppo(
-        output_dir,
-        TrainingConfig(total_timesteps=args.timesteps, seed=args.seed),
-    )
+    try:
+        metadata = train_ppo(
+            output_dir,
+            TrainingConfig(total_timesteps=args.timesteps, seed=args.seed, gamma=args.gamma),
+        )
+    except FileExistsError as error:
+        parser.error(str(error))
     print(f"Saved {metadata['checkpoint']} and metadata to {output_dir}")
     print(f"Throughput: {metadata['steps_per_second']:.1f} steps/s on CPU")
 

@@ -120,6 +120,24 @@ class LandingEnv(gym.Env[np.ndarray, np.ndarray]):
         reward = self._reward(terminated, reason)
         return self._observation(), reward, terminated, truncated, self._info(reason)
 
+    def decode_action(self, action: np.ndarray) -> tuple[np.ndarray, AppliedWrench]:
+        """Validate and convert a normalized simulation action to its body wrench.
+
+        The returned float32 action is the exact bounded vector consumed by the
+        environment. The wrench is a generic simulation input, not a hardware
+        or propulsion command.
+        """
+        action_array = np.asarray(action, dtype=np.float32)
+        if not self.action_space.contains(action_array):
+            raise ValueError("action must be a finite length-3 vector in [-1, 1]")
+        cfg = self.config
+        wrench = AppliedWrench(
+            force_x=float(action_array[0]) * cfg.force_scale,
+            force_z=float(action_array[1]) * cfg.force_scale,
+            moment=float(action_array[2]) * cfg.moment_scale,
+        )
+        return action_array, wrench
+
     def _observation(self) -> np.ndarray:
         """Return clipped normalized target-relative state; angles use sin/cos."""
         s, c = self.state, self.config
@@ -166,6 +184,27 @@ class LandingEnv(gym.Env[np.ndarray, np.ndarray]):
         if terminated:
             return shaping + (10.0 if reason == "success" else -10.0)
         return shaping
+
+    def reward_components(self, terminated: bool, reason: str | None) -> dict[str, float]:
+        """Return individually weighted reward terms for evaluation diagnostics."""
+        s, c = self.state, self.config
+        terminal_adjustment = (
+            10.0 if reason == "success" else -10.0 if terminated else 0.0
+        )
+        components = {
+            "horizontal_position_penalty": -0.01 * abs(s.x - c.target_x) / c.x_limit,
+            "height_penalty": -0.01 * s.z / c.z_limit,
+            "horizontal_velocity_penalty": -0.01 * abs(s.vx) / 5.0,
+            "vertical_velocity_penalty": -0.01 * abs(s.vz) / 10.0,
+            "pitch_penalty": -0.01 * abs(s.theta),
+            "pitch_rate_penalty": -0.01 * abs(s.omega) / 2.0,
+            "terminal_adjustment": terminal_adjustment,
+        }
+        components["state_shaping_total"] = sum(
+            value for key, value in components.items() if key != "terminal_adjustment"
+        )
+        components["total_reward"] = self._reward(terminated, reason)
+        return components
 
     def _info(self, terminal_reason: str | None) -> dict[str, Any]:
         return {

@@ -40,8 +40,9 @@ def step(
 ) -> PlanarState:
     """Advance one step; positive z is up and positive pitch rotates +x toward +z.
 
-    Uses explicit forward Euler: update rates from current accelerations, then
-    positions and angles from the updated rates. Forces are resolved in body axes.
+    Uses semi-implicit (symplectic) Euler: update rates from current
+    accelerations, then positions and angles from the updated rates. Forces are
+    resolved in body axes.
     """
     if dt <= 0.0:
         raise ValueError("dt must be positive")

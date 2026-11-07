@@ -14,7 +14,7 @@ python -m pip install -e ".[dev]"
 python -m pytest
 ```
 
-If PowerShell blocks activation, use `\.venv\Scripts\python.exe` in place of `python`; no activation policy change is required. Gymnasium is used by the environment layer; the M0/M1 physics module itself still imports without Gymnasium or NumPy. PPO is an optional extra. Graphics and hardware interfaces are not implemented.
+If PowerShell blocks activation, use `\.venv\Scripts\python.exe` in place of `python`; no activation policy change is required. Gymnasium is used by the environment layer; the M0/M1 physics module itself still imports without Gymnasium or NumPy. PPO and graphics are optional extras. Hardware interfaces are not implemented.
 
 ## Current subsystem
 
@@ -37,6 +37,28 @@ python -m vertex.learning.train --timesteps 256 --seed 123 --output-dir runs/m3-
 ```
 
 The run writes `ppo_vertex.zip`, `run_metadata.json`, and `logs/progress.csv`. The output folder must be new. A short run verifies integration and checkpoint loading; it does not assess whether the policy can land successfully. PPO is explicitly configured for CPU. Do not switch to GPU without benchmarking.
+
+## Headless policy evaluation
+
+Evaluate a saved checkpoint on the fixed default seeds (1000–1009), or pass an explicit seed list:
+
+```powershell
+python -m vertex.learning.evaluate --checkpoint runs/m3-smoke/ppo_vertex.zip --output-dir runs/m4-evaluation
+python -m vertex.learning.evaluate --checkpoint runs/m3-smoke/ppo_vertex.zip --output-dir runs/m4-evaluation-3 --seeds 1000 1001 1002
+```
+
+Evaluation writes a summary JSON, per-episode CSV, and state traces in JSONL. It is headless and deterministic. The training command already prints rollout progress tables in the terminal.
+
+## Episode playback
+
+Install the optional viewer dependency and select a seed from an evaluation trace:
+
+```powershell
+python -m pip install -e ".[visualization]"
+python -m vertex.visualization.viewer runs/m4-evaluation-my-training-run/episode_traces.jsonl --seed 1000
+```
+
+That opens an animated 2D playback window. To save a static trajectory image without opening a window, add `--save-image runs/m4-evaluation-my-training-run/episode-1000.png`. Rendering reads saved traces and is not part of training or physics.
 
 Simulation values and inputs are generic educational model parameters. They do not specify a vehicle or map to physical propulsion commands. Simulation success does not establish physical safety.
 

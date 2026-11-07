@@ -63,7 +63,19 @@ The current machine reports Windows 10 Home Single Language, CPython 3.12 and 3.
 
 M2 now adds Gymnasium 1.4.0 and NumPy 2.5.4 to the CPython 3.12 environment. The standalone physics layer remains independent from those packages. The landing task interface and all educational thresholds are recorded in EDL-011; none are real vehicle limits.
 
-M3 adds Stable-Baselines3 PPO 2.9.2 with PyTorch 2.15.0+cpu. Training is explicitly CPU-only pending any future benchmark. A 256-step integration smoke run saved and reloaded a checkpoint; its reward is not evidence of landing capability. See EDL-012.
+M3 adds Stable-Baselines3 PPO 2.9.2 with PyTorch 2.15.0+cpu. Training is explicitly CPU-only pending any future benchmark. The corrected default CLI completed 10,112 actual steps (whole 128-step rollouts) and saved a checkpoint. M4 evaluation on the default ten seeds found zero successes, all out-of-bounds. See EDL-012 and EDL-013.
+
+M4 adds deterministic checkpoint evaluation, a default fixed seed set (1000–1009), terminal-category and touchdown metrics, training-return trend summaries, and headless episode traces. The M3 smoke checkpoint had zero successes and ten unstable touchdowns over the default seeds; mean vertical touchdown speed was 12.505 m/s. The 10,112-step run also had zero successes on ten seeds, all out-of-bounds. These short runs show that the current policy has not landed successfully.
+
+M5 provides optional Matplotlib playback and static image export from M4 traces. Rendering stays outside training and physics. Install with `pip install -e ".[visualization]"`; run `python -m vertex.visualization.viewer <episode_traces.jsonl> --seed <seed>` for animated playback. See EDL-014.
+
+The initial PPO failure diagnosis is recorded in `Docs/BASELINE_FAILURE_REPORT.md`. Deterministic replay shows the saved policy applies sustained positive body-z force and negative moment before all ten episodes exit at the upper boundary. This is the immediate trajectory cause, not yet an explanation for why PPO learned those actions. No environment change or retraining has been performed; preserve the baseline while adding action/reward telemetry and interface invariants before selecting a correction.
+
+The baseline instrumentation and validation work is recorded in `Docs/BASELINE_INSTRUMENTATION_REPORT.md`. Evaluation can optionally emit per-step JSONL diagnostics; the default evaluation and training paths remain unchanged. Interface, reward, boundary, numerical integration, deterministic replay, and scripted physics scenario tests now cover the identified gaps. The original checkpoint and M4 baseline artifacts were preserved.
+
+The saved PPO policy's behavior is analyzed in `Docs/POLICY_BEHAVIOR_ANALYSIS.md`. All ten evaluation seeds start with strong upward body-z force and negative pitch moment; seed 1000's first state proven unable to avoid the upper boundary on the next step is immediately before step 99. A candidate explanation is discounted failure delay (gamma=0.99) combined with weak per-step shaping; this remains a hypothesis. No training or task change has been made.
+
+EXP-001 tested that discount hypothesis with one training run changing only gamma from 0.99 to 1.0 (seed 7, 10,112 collected steps). It still had 0/10 successes and 10/10 out-of-bounds failures (7 upper, 3 horizontal); mean episode length fell from 95.8 to 60.7 steps, while first-30 normalized body-Z action rose from 0.915 to 1.0 and all applied action channels were positive (horizontal saturated at +1 throughout; body-Z and moment were frequently at their positive limits). This weakens the proposed gamma explanation but is only one run per setting. Full configuration and evidence: `Docs/experiments/EXP-001_GAMMA_INVESTIGATION.md`. No physical performance or safety inference follows from this simulation result.
 
 ## 5. Engineering principles
 
