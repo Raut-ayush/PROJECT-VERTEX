@@ -57,6 +57,14 @@ Earlier software troubleshooting showed a PyTorch CUDA-enabled installation work
 
 The owner previously had multiple Python versions installed, including Python 3.12 and newer versions. Avoid blindly using the system default Python. Select a version supported by the current dependency matrix and create a project-local virtual environment.
 
+### Current workspace inspection (2026-11-07)
+
+The current machine reports Windows 10 Home Single Language, CPython 3.12 and 3.14, and an NVIDIA GeForce RTX 3050 Laptop GPU with driver 616.56 / CUDA UMD 13.4 (`nvidia-smi`). WMI inventory access was denied. A project `.venv` now uses CPython 3.12. M0/M1 require no GPU or runtime package; PyTorch/CUDA package compatibility remains to be checked if a later milestone needs it. See `Docs/ENGINEERING_DECISIONS.md` EDL-010.
+
+M2 now adds Gymnasium 1.4.0 and NumPy 2.5.4 to the CPython 3.12 environment. The standalone physics layer remains independent from those packages. The landing task interface and all educational thresholds are recorded in EDL-011; none are real vehicle limits.
+
+M3 adds Stable-Baselines3 PPO 2.9.2 with PyTorch 2.15.0+cpu. Training is explicitly CPU-only pending any future benchmark. A 256-step integration smoke run saved and reloaded a checkpoint; its reward is not evidence of landing capability. See EDL-012.
+
 ## 5. Engineering principles
 
 - Start with the smallest model that teaches the intended system concepts.
