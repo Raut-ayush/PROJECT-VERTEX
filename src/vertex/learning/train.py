@@ -13,13 +13,17 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import torch
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.logger import configure
 
 from vertex.environment import LandingEnv, LandingEnvConfig
 
 DEFAULT_TOTAL_TIMESTEPS = 10_000
 DEFAULT_SEED = 7
+DEFAULT_DIAGNOSTIC_STEPS = 2_048
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +52,105 @@ class TrainingConfig:
             raise ValueError("gamma must be between 0 and 1 inclusive")
         if self.device != "cpu":
             raise ValueError("M3 baseline is CPU-only; benchmark before enabling GPU")
+
+
+class TrainingDiagnosticsCallback(BaseCallback):
+    """Optionally record sampled PPO transitions without changing collection."""
+
+    def __init__(self, output_path: Path, diagnostic_steps: int) -> None:
+        super().__init__(verbose=0)
+        if diagnostic_steps <= 0:
+            raise ValueError("diagnostic_steps must be positive")
+        self.output_path = output_path
+        self.diagnostic_steps = diagnostic_steps
+        self._stream: Any = None
+        self._states_before: list[Any] = []
+        self._episode_ids: list[int] = []
+        self._next_episode_id = 1
+
+    def _on_training_start(self) -> None:
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._stream = self.output_path.open("w", encoding="utf-8")
+        env_count = self.training_env.num_envs
+        self._episode_ids = list(range(self._next_episode_id, self._next_episode_id + env_count))
+        self._next_episode_id += env_count
+        self._states_before = self.training_env.get_attr("state")
+
+    @staticmethod
+    def _state_record(state: Any) -> dict[str, float]:
+        return {
+            "x_m": float(state.x),
+            "z_m": float(state.z),
+            "vx_mps": float(state.vx),
+            "vz_mps": float(state.vz),
+            "theta_rad": float(state.theta),
+            "omega_radps": float(state.omega),
+        }
+
+    def _on_step(self) -> bool:
+        # SB3 2.9.2 calls callbacks after env.step() but before rollout_buffer.add().
+        # Read the collector locals without replacing or mutating its sampled actions.
+        if self.num_timesteps > self.diagnostic_steps:
+            return True
+
+        local = self.locals
+        sampled_actions = np.asarray(local["actions"])
+        applied_actions = np.asarray(local["clipped_actions"])
+        observations = local["obs_tensor"]
+        with torch.no_grad():
+            action_distribution = self.model.policy.get_distribution(observations).distribution
+            policy_means = action_distribution.mean.detach().cpu().numpy()
+            policy_stds = action_distribution.stddev.detach().cpu().numpy()
+
+        rewards = np.asarray(local["rewards"]).reshape(-1)
+        dones = np.asarray(local["dones"]).reshape(-1)
+        infos = local["infos"]
+        bounds_low = np.asarray(self.training_env.action_space.low)
+        bounds_high = np.asarray(self.training_env.action_space.high)
+        observation_values = observations.detach().cpu().numpy()
+
+        for env_index, (sampled, applied, reward, done, info) in enumerate(
+            zip(sampled_actions, applied_actions, rewards, dones, infos, strict=True)
+        ):
+            clipped = np.logical_or(sampled < bounds_low, sampled > bounds_high)
+            truncated = bool(done and info.get("TimeLimit.truncated", False))
+            terminated = bool(done and not truncated)
+            record = {
+                "schema_version": 1,
+                "global_timestep": int(self.num_timesteps - len(dones) + env_index + 1),
+                "rollout_index": int((self.num_timesteps - len(dones)) // self.model.n_steps + 1),
+                "env_index": env_index,
+                "episode_id": self._episode_ids[env_index],
+                "observation": observation_values[env_index].tolist(),
+                "state_before": self._state_record(self._states_before[env_index]),
+                "sampled_action_before_clipping": sampled.tolist(),
+                "action_passed_to_environment": applied.tolist(),
+                "action_clipped_by_channel": clipped.tolist(),
+                "policy_mean": policy_means[env_index].tolist(),
+                "policy_standard_deviation": policy_stds[env_index].tolist(),
+                "reward": float(reward),
+                "terminated": terminated,
+                "truncated": truncated,
+                "termination_reason": info.get("terminal_reason"),
+            }
+            self._stream.write(json.dumps(record, separators=(",", ":")) + "\n")
+
+        # DummyVecEnv has already reset completed episodes. This read only seeds
+        # the next transition's pre-action physical state and consumes no RNG.
+        self._states_before = self.training_env.get_attr("state")
+        for env_index, done in enumerate(dones):
+            if done:
+                self._episode_ids[env_index] = self._next_episode_id
+                self._next_episode_id += 1
+        return True
+
+    def _on_training_end(self) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
 
 
 def _package_version(name: str) -> str:
@@ -83,6 +186,9 @@ def train_ppo(
     output_dir: str | Path,
     training: TrainingConfig | None = None,
     environment: LandingEnvConfig | None = None,
+    *,
+    diagnostics: bool = False,
+    diagnostic_steps: int = DEFAULT_DIAGNOSTIC_STEPS,
 ) -> dict[str, Any]:
     """Train PPO once, writing a checkpoint, CSV log, and run metadata.
 
@@ -91,6 +197,8 @@ def train_ppo(
     """
     training = training or TrainingConfig()
     environment = environment or LandingEnvConfig()
+    if diagnostic_steps <= 0:
+        raise ValueError("diagnostic_steps must be positive")
     output_path = Path(output_dir)
     if output_path.exists():
         raise FileExistsError(
@@ -114,14 +222,25 @@ def train_ppo(
         verbose=1,
     )
     model.set_logger(configure(str(log_dir), ["stdout", "csv"]))
+    diagnostics_callback = (
+        TrainingDiagnosticsCallback(output_path / "training_diagnostics.jsonl", diagnostic_steps)
+        if diagnostics
+        else None
+    )
     run_started_utc = datetime.now(timezone.utc).isoformat()
     started = time.perf_counter()
     try:
-        model.learn(total_timesteps=training.total_timesteps, progress_bar=False)
+        model.learn(
+            total_timesteps=training.total_timesteps,
+            progress_bar=False,
+            callback=diagnostics_callback,
+        )
         elapsed_seconds = time.perf_counter() - started
         checkpoint_base = output_path / "ppo_vertex"
         model.save(str(checkpoint_base))
     finally:
+        if diagnostics_callback is not None:
+            diagnostics_callback.close()
         env.close()
 
     actual_timesteps = int(model.num_timesteps)
@@ -151,6 +270,14 @@ def train_ppo(
         "training_log": "logs/progress.csv",
         "learning_result_claim": "integration smoke only; no learning-success claim",
     }
+    if diagnostics:
+        metadata["training_diagnostics"] = {
+            "enabled": True,
+            "path": "training_diagnostics.jsonl",
+            "recorded_environment_steps": min(actual_timesteps, diagnostic_steps),
+            "requested_window_environment_steps": diagnostic_steps,
+            "method": "SB3 callback reads collector locals after env.step and before rollout_buffer.add",
+        }
     (output_path / "run_metadata.json").write_text(
         json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
     )
@@ -162,6 +289,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timesteps", type=int, default=DEFAULT_TOTAL_TIMESTEPS)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--diagnostics", action="store_true")
+    parser.add_argument("--diagnostic-steps", type=int, default=DEFAULT_DIAGNOSTIC_STEPS)
     parser.add_argument("--output-dir", type=Path, default=None)
     return parser
 
@@ -175,6 +304,8 @@ def main() -> None:
         metadata = train_ppo(
             output_dir,
             TrainingConfig(total_timesteps=args.timesteps, seed=args.seed, gamma=args.gamma),
+            diagnostics=args.diagnostics,
+            diagnostic_steps=args.diagnostic_steps,
         )
     except FileExistsError as error:
         parser.error(str(error))

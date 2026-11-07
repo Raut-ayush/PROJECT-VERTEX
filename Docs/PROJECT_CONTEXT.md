@@ -77,6 +77,10 @@ The saved PPO policy's behavior is analyzed in `Docs/POLICY_BEHAVIOR_ANALYSIS.md
 
 EXP-001 tested that discount hypothesis with one training run changing only gamma from 0.99 to 1.0 (seed 7, 10,112 collected steps). It still had 0/10 successes and 10/10 out-of-bounds failures (7 upper, 3 horizontal); mean episode length fell from 95.8 to 60.7 steps, while first-30 normalized body-Z action rose from 0.915 to 1.0 and all applied action channels were positive (horizontal saturated at +1 throughout; body-Z and moment were frequently at their positive limits). This weakens the proposed gamma explanation but is only one run per setting. Full configuration and evidence: `Docs/experiments/EXP-001_GAMMA_INVESTIGATION.md`. No physical performance or safety inference follows from this simulation result.
 
+The pretraining engineering audit is recorded in `Docs/PRETRAINING_ENGINEERING_AUDIT.md`. A full-state simulation-only reference controller landed on the ten fixed seeds, confirming feasibility for those sampled states under the toy model. Reward tests ranked success above the tested undesirable behaviors, but gamma=0.99 made delayed upward-force failure slightly better than free fall and left only a small discounted margin over hovering to the time limit. The untrained PPO mean was near zero while its unit Gaussian standard deviation implies frequent stochastic action-bound clipping; existing training logs do not measure those clipped samples. No training or simulator changes were made in this audit.
+
+EXP-002 added opt-in first-window PPO exploration diagnostics and reproduced the original seed-7 gamma=0.99 baseline exactly: trained policy parameters and PPO metrics match, with only elapsed time differing. Of 2,048 sampled actions, 31.54% / 31.10% / 31.01% clipped by channel and 68.60% had at least one clipped channel. Across 16 rollouts, standard deviations stayed near 1 and clipping did not decrease steadily. Details and limits are in `Docs/experiments/EXP-002_EXPLORATION_ANALYSIS.md`; no further experiment was started.
+
 ## 5. Engineering principles
 
 - Start with the smallest model that teaches the intended system concepts.

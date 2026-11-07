@@ -1,5 +1,20 @@
 # Change log
 
+## 2026-11-07 — EXP-002 training-time exploration audit
+
+- Added opt-in headless training JSONL diagnostics for sampled pre-clip actions, applied actions, clipping flags, policy means/stds, pre-action observation/state, rewards, terminal state, global timestep, rollout, and episode identifier. Default training remains uninstrumented.
+- Inspected SB3 2.9.2 collector order and used a callback after `env.step()` but before rollout-buffer insertion. A parity test confirmed identical seeded policy parameters with diagnostics enabled and disabled; the 10,112-step EXP-002 checkpoint also exactly matches the original baseline policy parameters.
+- Measured 31.54%, 31.10%, and 31.01% clipping by channel and 68.60% of action vectors with at least one clipped channel in the first 2,048 steps. Policy standard deviation stayed near 1.0 and clipping did not decline steadily over 16 rollouts.
+- Full pytest suite: 56 passed. See `Docs/experiments/EXP-002_EXPLORATION_ANALYSIS.md`; no subsequent experiment was started.
+
+## 2026-11-07 — Pretraining engineering audit
+
+- Audited model control authority, actual environment reward rankings, the untrained PPO policy, stochastic action clipping behavior, and baseline/EXP-001 training metrics without retraining or changing simulator code.
+- A documented full-state controller using existing physics/actions achieved the current success criteria on all ten fixed seeds; its first asymptotic descent variant exposed a controller issue and was corrected without changing the model.
+- Used the real reward path on success, free fall/zero action, constant-altitude truncation, and sustained upward-force scenarios. Found a narrow discounted-return margin between success and constant altitude and a small gamma=0.99 ranking reversal between delayed upward failure and free fall.
+- Fresh untrained policy means were near zero and never clipped deterministically on tested states; initial Gaussian standard deviation was 1.0, giving about 31.7% expected clipping per sampled scalar channel. Existing run logs do not contain training-time action-bound clipping counts.
+- See `Docs/PRETRAINING_ENGINEERING_AUDIT.md` for equations, controller assumptions, per-seed results, reward-component totals, policy probes, log summaries, and limitations. No PPO training or EXP-002 was started.
+
 ## 2026-11-07 — EXP-001 gamma investigation
 
 - Added an explicit `--gamma` training option with the baseline-preserving default of 0.99; saved run metadata now records gamma.
